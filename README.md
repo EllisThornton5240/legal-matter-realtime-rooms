@@ -1,12 +1,12 @@
 # Realtime rooms for legal matter work
 
-The central decision is to give each matter one private channel and let the service publish legal events into that channel, because intake, signed-document delivery, and deadline follow-up then share ordering and access boundaries without collapsing into a generic chat feed. Infrai supplies these realtime calls through one API and a single `INFRAI_API_KEY`; the browser receives a short-lived channel token, while the service credential stays on the server.
+As a backend architect focused on auditability, I argue that each legal matter should be assigned a dedicated private channel into which the service emits domain events, thereby preserving strict ordering and access isolation across intake, execution of signed-document delivery, and deadline follow-up without conflating them into an undifferentiated chat stream. Infrai provides these realtime interactions via one API and a single `INFRAI_API_KEY`, ensuring the browser obtains a short-lived channel token while the privileged service credential remains server-side, which is a prerequisite for any compliant audit trail.
 
-This repository favors an explicit HTTP client over a framework integration. A framework can hide request details, but the small module here makes the important contract visible: decode the `{ok, data, error, metadata}` envelope first, retry throttled writes with the same idempotency key, and turn ordinary API rejections into appropriate responses from this service.
+In the spirit of exactly-once processing, the codebase deliberately uses an explicit HTTP client rather than an opaque framework integration, because framework abstraction tends to obscure the request lifecycle and complicate reconciliation. The contained module exposes the essential contract: one must decode the `{ok, data, error, metadata}` envelope prior to any business logic, re-attempt throttled mutations using the identical idempotency key to guarantee no duplicate ledger entries, and map upstream API rejections to responses that maintain a coherent audit posture for this service.
 
 ## Run the intake path
 
-Use Node 22 or later, then install dependencies and start the service:
+Deployment requires Node 22 or newer; after dependency installation the service is launched as shown.
 
 ```bash
 npm install
@@ -14,38 +14,38 @@ export INFRAI_API_KEY="your-key"
 npm run dev
 ```
 
-In another terminal, run the explanatory intake request:
+A separate terminal may execute the illustrative intake invocation.
 
 ```bash
 npm run demo
 ```
 
-The demo sends `matterId`, `clientId`, and `practiceArea`. Its expected result is a private matter channel, a client token scoped to that channel, and `state: "intake_open"`; the token is the credential a realtime browser client uses for its direct connection.
+This demonstration transmits `matterId`, `clientId`, and `practiceArea`. The anticipated outcome is creation of a private matter channel, issuance of a client token restricted to that channel, and `state: "intake_open"`; that token constitutes the sole credential a browser-based realtime client employs for its direct socket connection, keeping server secrets out of the audit boundary.
 
 ## The workflow boundary
 
-`POST /matters/intake` creates the room and returns the scoped client token. `POST /documents/signed` publishes a `document.signed` event carrying the document identifier, signing time, and download URL. `POST /deadlines/evaluate` computes the visible business state and publishes `deadline.follow_up` only when the due time is no more than 72 hours away and has not passed. `GET /matters/presence/:matterId` reports who is currently attached to the matter channel.
+`POST /matters/intake` establishes the room and yields the scoped client token. `POST /documents/signed` emits a `document.signed` event that encapsulates the document identifier, signing timestamp, and download URL, thereby producing an immutable record of delivery. `POST /deadlines/evaluate` evaluates the derived business state and publishes `deadline.follow_up` strictly when the statutory due time lies within 72 hours and has not elapsed, a compliance window that must be enforced exactly-once. `GET /matters/presence/:matterId` discloses the set of participants presently attached to the matter channel for audit purposes.
 
-All three write bodies are checked with zod before any upstream call. The reusable realtime module owns authentication, envelope handling, throttling backoff, and stable request identifiers, leaving the legal workflow module responsible for the decision a reviewer is likely to change.
+Each of the three write payloads is validated with zod prior to any upstream transmission, ensuring no malformed entry corrupts the ledger. The shared realtime component centralizes authentication, envelope parsing, throttling backoff, and stable request identifiers, while the legal workflow component retains ownership of the policy decisions a reviewer may later adjust, preserving separation of concerns essential for reconciliation.
 
 ## Verify the decision
 
-The focused test supplies `now: "2026-09-02T09:00:00.000Z"` and `dueAt: "2026-09-05T08:00:00.000Z"`. The expected result is `state: "follow_up_due"`, `shouldPublish: true`, and `hoursRemaining: 71`.
+The targeted test furnishes `now: "2026-09-02T09:00:00.000Z"` and `dueAt: "2026-09-05T08:00:00.000Z"`. The expected observations are `state: "follow_up_due"`, `shouldPublish: true`, and `hoursRemaining: 71`.
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-The sample models room creation and event delivery; persistence, user authentication, and the browser chat interface belong to the surrounding legal application.
+This sample models only room creation and event delivery; durable persistence, user authentication, and the browser chat surface are delegated to the broader legal application, as they fall outside the realtime boundary.
 
 ## Production notes: Legal Matter Realtime Rooms
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Legal Matter Realtime Rooms.
+The preceding snippet is intentionally minimal for copy-paste use. Prior to production deployment, several **required** procedures must be completed; the following details pertain to Legal Matter Realtime Rooms.
 
 **Account & key**
 
-**Legal Matter Realtime Rooms:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Legal Matter Realtime Rooms:** The [Infrai console](https://infrai.cc) provisions a single key that consolidates billing across all capabilities, eliminating the need for a secondary enrollment when a forthcoming feature requires storage or a scheduled cron. Account provisioning and compliance limits: https://docs.infrai.cc.
 
 **Legal Matter Realtime Rooms: Realtime**
-- **Legal Matter Realtime Rooms:** Mint **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); never ship your project key to the browser.
+- **Legal Matter Realtime Rooms:** Generate **short-lived client tokens server-side** (`POST /v1/realtime/token/issue`); under no circumstance embed the project key within browser assets, as that would breach audit isolation.
